@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack Buffer Overflow Explorer</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #1a2029;
+    --panel-2: #232b36;
+    --border: #2f3a47;
+    --text: #d7dee7;
+    --muted: #8a97a6;
+    --accent: #5eb0ef;
+    --safe: #3fb950;
+    --warn: #d6a243;
+    --danger: #f06d6d;
+    --canary: #c77dff;
+    --mono: "SF Mono", "JetBrains Mono", "Fira Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+    padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 0.95rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .card h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+
+  /* Controls */
+  label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 6px; }
+  input[type="text"] {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); font-family: var(--mono); font-size: 0.95rem;
+    padding: 10px 12px; border-radius: 6px; outline: none;
+  }
+  input[type="text"]:focus { border-color: var(--accent); }
+  input[type="range"] { width: 100%; accent-color: var(--accent); }
+  .row { margin-bottom: 16px; }
+  .inline { display: flex; align-items: center; gap: 10px; }
+  .btns { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  button {
+    background: var(--accent); color: #06121f; border: none; font-weight: 600;
+    padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 0.9rem;
+  }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .chip { background: var(--panel-2); border: 1px solid var(--border); border-radius: 20px;
+    padding: 4px 11px; font-size: 0.78rem; color: var(--muted); cursor: pointer; }
+  .chip:hover { border-color: var(--accent); color: var(--text); }
+
+  /* Code */
+  pre { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 14px; font-family: var(--mono); font-size: 0.85rem; overflow-x: auto; margin: 0;
+    color: #c9d4e0; }
+  .kw { color: #ff9e64; } .fn { color: #7aa2f7; } .str { color: #9ece6a; } .cm { color: #5a6b7d; }
+  .hl { background: rgba(94,176,239,0.14); border-radius: 3px; }
+
+  /* Stack */
+  .stack { display: flex; flex-direction: column; gap: 3px; }
+  .region { position: relative; }
+  .region-label { font-size: 0.68rem; color: var(--muted); font-family: var(--mono);
+    margin-bottom: 3px; letter-spacing: 0.03em; }
+  .cells { display: flex; gap: 3px; }
+  .cell {
+    flex: 1; min-width: 0; height: 34px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 0.8rem; font-weight: 600;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+    transition: background 0.12s, color 0.12s, border-color 0.12s, transform 0.12s;
+  }
+  .cell.filled-buffer { background: rgba(63,185,80,0.18); border-color: var(--safe); color: #b9f2c3; }
+  .cell.filled-canary { background: rgba(199,125,255,0.2); border-color: var(--canary); color: #e9ccff; }
+  .cell.filled-sfp { background: rgba(214,162,67,0.2); border-color: var(--warn); color: #f4dca0; }
+  .cell.filled-ret { background: rgba(240,109,109,0.22); border-color: var(--danger); color: #ffc9c9; }
+  .cell.writing { transform: scale(1.12); box-shadow: 0 0 0 2px var(--accent); }
+  .addr { font-size: 0.62rem; color: #556; font-family: var(--mono); width: 54px;
+    text-align: right; padding-right: 8px; flex: 0 0 54px; }
+  .region-flex { display: flex; align-items: flex-end; }
+  .region-body { flex: 1; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 0.74rem; color: var(--muted); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: middle; }
+
+  /* Status */
+  .status { margin-top: 20px; }
+  .verdict { font-weight: 700; font-size: 1.05rem; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .verdict.safe { color: var(--safe); }
+  .verdict.warn { color: var(--warn); }
+  .verdict.danger { color: var(--danger); }
+  .verdict.blocked { color: var(--canary); }
+  .explain { font-size: 0.9rem; color: var(--text); background: var(--panel-2);
+    border-left: 3px solid var(--border); padding: 12px 14px; border-radius: 0 6px 6px 0; }
+  .meter { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); margin-top: 10px; }
+  .note { font-size: 0.78rem; color: var(--muted); margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Stack Buffer Overflow Explorer</h1>
+  <p class="sub">Type an input string and watch <code>strcpy()</code> copy it byte-by-byte into a fixed-size buffer. When the input is longer than the buffer, the extra bytes spill into adjacent stack memory — the saved frame pointer and the return address.</p>
+
+  <div class="grid">
+    <!-- LEFT: controls + code -->
+    <div>
+      <div class="card">
+        <h2>Attacker input</h2>
+        <div class="row">
+          <label for="inp">String passed to the vulnerable function</label>
+          <input id="inp" type="text" value="hello" maxlength="40" autocomplete="off" spellcheck="false">
+          <div class="chips">
+            <span class="chip" data-fill="hello">hello (safe)</span>
+            <span class="chip" data-fill="AAAAAAAAAAAA">12× A (overflow)</span>
+            <span class="chip" data-fill="AAAAAAAAAAAAAAAABBBBCCCC">reach return addr</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <label for="bufsize">Buffer size: <strong id="bufval">8</strong> bytes</label>
+          <input id="bufsize" type="range" min="4" max="16" step="1" value="8">
+        </div>
+
+        <div class="row inline">
+          <label class="toggle"><input type="checkbox" id="canary"> Enable stack canary protection</label>
+        </div>
+
+        <div class="btns">
+          <button id="run">▶ Run strcpy()</button>
+          <button id="reset" class="ghost">Reset</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:20px;">
+        <h2>Vulnerable code</h2>
+        <pre id="code"></pre>
+        <div class="note">
+          <b>Why this is unsafe:</b> <code>strcpy</code> copies until it hits a null byte, with no idea how big <code>buffer</code> is. The compiler lays locals out at <em>lower</em> addresses than the saved frame pointer and return address, and the copy writes toward <em>higher</em> addresses — so an over-long string marches straight up into the saved state of the caller.
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: stack + status -->
+    <div>
+      <div class="card">
+        <h2>Stack frame (high address at top)</h2>
+        <div id="stack" class="stack"></div>
+        <div class="legend">
+          <span><span class="dot" style="background:var(--safe)"></span>buffer</span>
+          <span><span class="dot" style="background:var(--canary)"></span>canary</span>
+          <span><span class="dot" style="background:var(--warn)"></span>saved frame ptr</span>
+          <span><span class="dot" style="background:var(--danger)"></span>return address</span>
+        </div>
+
+        <div class="status">
+          <div id="verdict" class="verdict safe">● Ready</div>
+          <div id="explain" class="explain">Press <b>Run strcpy()</b> to copy the input into the buffer.</div>
+          <div id="meter" class="meter"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const RET_SIZE = 4, SFP_SIZE = 4, CANARY_SIZE = 4;
+  const $ = id => document.getElementById(id);
+  const inp = $('inp'), bufsize = $('bufsize'), bufval = $('bufval'),
+        canary = $('canary'), stackEl = $('stack'), codeEl = $('code'),
+        verdictEl = $('verdict'), explainEl = $('explain'), meterEl = $('meter'),
+        runBtn = $('run'), resetBtn = $('reset');
+
+  let running = false;
+
+  // Build the logical byte layout (ascending address = ascending index).
+  // index 0 = buffer[0] (lowest addr) ... top = return address (highest addr).
+  function layout() {
+    const n = +bufsize.value;
+    const regions = [{ name: 'buffer', key: 'buffer', size: n }];
+    if (canary.checked) regions.push({ name: 'stack canary', key: 'canary', size: CANARY_SIZE });
+    regions.push({ name: 'saved frame pointer (RBP)', key: 'sfp', size: SFP_SIZE });
+    regions.push({ name: 'return address (RIP)', key: 'ret', size: RET_SIZE });
+    // assign logical indices
+    let idx = 0;
+    regions.forEach(r => { r.start = idx; idx += r.size; });
+    return { regions, total: idx, bufSize: n };
+  }
+
+  function renderCode() {
+    const n = +bufsize.value;
+    codeEl.innerHTML =
+`<span class="cm">// Classic vulnerable function</span>
+<span class="kw">void</span> <span class="fn">vuln</span>(<span class="kw">char</span> *input) {
+    <span class="kw">char</span> <span class="hl">buffer[${n}]</span>;
+    <span class="fn">strcpy</span>(buffer, input);   <span class="cm">// no bounds check!</span>
+    <span class="kw">return</span>;                 <span class="cm">// pops saved RBP, jumps to return addr</span>
+}`;
+  }
+
+  function buildStack(filledCount) {
+    const { regions, total } = layout();
+    // Build cell metadata in ascending address order.
+    const cells = [];
+    regions.forEach(r => {
+      for (let i = 0; i < r.size; i++) cells.push({ region: r.key, logical: r.start + i });
+    });
+    stackEl.innerHTML = '';
+    // Render top (highest addr) to bottom. Group by region for labels.
+    const rendered = [...regions].reverse();
+    rendered.forEach(r => {
+      const block = document.createElement('div');
+      block.className = 'region';
+      const lbl = document.createElement('div');
+      lbl.className = 'region-label';
+      lbl.textContent = `▸ ${r.name} · ${r.size}B`;
+      block.appendChild(lbl);
+
+      const rowWrap = document.createElement('div');
+      rowWrap.className = 'region-flex';
+      const addr = document.createElement('div');
+      addr.className = 'addr';
+      addr.textContent = '0x' + (0x7000 + r.start).toString(16);
+      const body = document.createElement('div');
+      body.className = 'cells region-body';
+
+      // cells within region, high index (left) ... low index (right)
+      const idxs = [];
+      for (let i = r.size - 1; i >= 0; i--) idxs.push(r.start + i);
+      idxs.forEach(logical => {
+        const c = document.createElement('div');
+        c.className = 'cell';
+        c.dataset.logical = logical;
+        const written = logical < (filledCount ?? 0);
+        if (written) {
+          c.classList.add('filled-' + r.key);
+          const ch = window.__bytes ? window.__bytes[logical] : '';
+          c.textContent = displayByte(ch);
+        } else {
+          c.textContent = '·';
+        }
+        body.appendChild(c);
+      });
+      rowWrap.appendChild(addr);
+      rowWrap.appendChild(body);
+      block.appendChild(rowWrap);
+      stackEl.appendChild(block);
+    });
+    return { total };
+  }
+
+  function displayByte(ch) {
+    if (ch === undefined || ch === '') return '·';
+    const code = ch.charCodeAt(0);
+    if (code >= 32 && code <= 126) return ch;
+    return code.toString(16).padStart(2, '0');
+  }
+
+  function cellByLogical(l) { return stackEl.querySelector(`[data-logical="${l}"]`); }
+
+  function reset() {
+    window.__bytes = [];
+    renderCode();
+    buildStack(0);
+    verdictEl.className = 'verdict safe';
+    verdictEl.textContent = '● Ready';
+    explainEl.innerHTML = 'Press <b>Run strcpy()</b> to copy the input into the buffer.';
+    meterEl.textContent = '';
+  }
+
+  async function run() {
+    if (running) return;
+    running = true; runBtn.disabled = true;
+    const str = inp.value;
+    const { regions, total, bufSize } = layout();
+    window.__bytes = [];
+    buildStack(0);
+
+    const canaryRegion = regions.find(r => r.key === 'canary');
+    const sfpRegion = regions.find(r => r.key === 'sfp');
+    const retRegion = regions.find(r => r.key === 'ret');
+
+    let hitCanary = false, hitSfp = false, hitRet = false;
+    const writeCount = Math.min(str.length, total);
+
+    for (let i = 0; i < writeCount; i++) {
+      window.__bytes[i] = str[i];
+      buildStack(i + 1);
+      const cell = cellByLogical(i);
+      if (cell) cell.classList.add('writing');
+      // classify
+      if (i >= bufSize) {
+        if (canaryRegion && i >= canaryRegion.start && i < canaryRegion.start + canaryRegion.size) hitCanary = true;
+        if (i >= sfpRegion.start && i < sfpRegion.start + sfpRegion.size) hitSfp = true;
+        if (i >= retRegion.start) hitRet = true;
+      }
+      meterEl.textContent = `writing byte ${i + 1}/${str.length} → address 0x${(0x7000 + i).toString(16)}  (${i < bufSize ? 'inside buffer' : 'OUT OF BOUNDS'})`;
+      await sleep(110);
+      if (cell) cell.classList.remove('writing');
+    }
+    if (str.length > total) {
+      meterEl.textContent += `  — ${str.length - total} further byte(s) would run off the stack frame.`;
+    }
+
+    // Verdict
+    if (str.length <= bufSize) {
+      verdictEl.className = 'verdict safe';
+      verdictEl.textContent = '● No overflow';
+      explainEl.innerHTML = `The input is ${str.length} byte(s) and the buffer holds ${bufSize}. Everything fit — adjacent stack memory is untouched. <em>(Remember C strings also need a null terminator, so a ${bufSize}-char string already fills a ${bufSize}-byte buffer exactly.)</em>`;
+    } else if (canary.checked && hitCanary) {
+      verdictEl.className = 'verdict blocked';
+      verdictEl.textContent = '● Overflow detected — program aborted';
+      explainEl.innerHTML = `The copy overran the buffer and clobbered the <b>stack canary</b>. At <code>return</code>, the function checks the canary, sees it changed, and calls <code>__stack_chk_fail</code> → the process aborts (SIGABRT) <b>before</b> the corrupted return address is ever used. The crash is the defense: the hijack is prevented, though it's still a denial-of-service.`;
+    } else if (hitRet) {
+      verdictEl.className = 'verdict danger';
+      verdictEl.textContent = '● Return address overwritten';
+      explainEl.innerHTML = `The overflow reached the <b>return address</b>. When <code>vuln()</code> returns, the CPU jumps to whatever bytes now sit there instead of back to the caller. In a real attack this is where control flow gets redirected — but that's the line we stop at here: this is a teaching model, not an exploit.`;
+    } else if (hitSfp) {
+      verdictEl.className = 'verdict warn';
+      verdictEl.textContent = '● Saved frame pointer corrupted';
+      explainEl.innerHTML = `The overflow spilled past the buffer into the <b>saved frame pointer</b> but didn't reach the return address yet. The caller's stack base is now wrong, which typically causes misbehavior or a crash. Add a few more bytes to reach the return address.`;
+    } else {
+      verdictEl.className = 'verdict warn';
+      verdictEl.textContent = '● Minor overflow';
+      explainEl.innerHTML = `Bytes went past the buffer boundary into adjacent memory.`;
+    }
+
+    running = false; runBtn.disabled = false;
+  }
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Events
+  bufsize.addEventListener('input', () => { bufval.textContent = bufsize.value; reset(); });
+  canary.addEventListener('change', reset);
+  inp.addEventListener('input', () => { if (!running) { buildStack(0); verdictEl.className='verdict safe'; verdictEl.textContent='● Ready'; explainEl.innerHTML='Press <b>Run strcpy()</b> to copy the input into the buffer.'; meterEl.textContent=''; }});
+  runBtn.addEventListener('click', run);
+  resetBtn.addEventListener('click', reset);
+  document.querySelectorAll('.chip').forEach(ch =>
+    ch.addEventListener('click', () => { inp.value = ch.dataset.fill; inp.dispatchEvent(new Event('input')); }));
+
+  reset();
+})();
+</script>
+</body>
+</html>
