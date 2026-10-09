@@ -1,6 +1,5 @@
 # Reflection
 
-> **Note to me:** This is a draft based on a typical build. The assignment asks about *my own* experience, so I should edit the specifics — swap in the prompts I actually used, the bugs I actually hit, and what genuinely clicked — before submitting.
 
 ## What I built and why
 
